@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from datetime import datetime
+from io import BytesIO
 
 # ====================== FUNGSI UTAMA ======================
 def clean_currency_column(series):
@@ -135,15 +136,17 @@ def recap_per_nasabah(df):
         total_plafon = aktif_group['Plafon'].sum() if not aktif_group.empty else 0
         
         # c. Total OS (kondisi aktif DAN fasilitas = modal kerja)
-        # PERBAIKAN: Gunakan kolom "Fasilitas" bukan "Jenis Kredit"
         if 'Fasilitas' in aktif_group.columns:
             modal_kerja_mask = aktif_group['Fasilitas'].astype(str).str.lower().str.strip() == 'modal kerja'
             total_os = aktif_group.loc[modal_kerja_mask, 'O/S'].sum() if not aktif_group.empty else 0
         else:
-            # Fallback jika kolom Fasilitas tidak ada (menggunakan Jenis Kredit)
+            # Fallback jika kolom Fasilitas tidak ada
             st.warning(f"Kolom 'Fasilitas' tidak ditemukan untuk CIF {cif}, menggunakan 'Jenis Kredit' sebagai fallback")
-            modal_kerja_mask = aktif_group['Jenis Kredit'].astype(str).str.lower().str.strip() == 'modal kerja'
-            total_os = aktif_group.loc[modal_kerja_mask, 'O/S'].sum() if not aktif_group.empty else 0
+            if 'Jenis Kredit' in aktif_group.columns:
+                modal_kerja_mask = aktif_group['Jenis Kredit'].astype(str).str.lower().str.strip() == 'modal kerja'
+                total_os = aktif_group.loc[modal_kerja_mask, 'O/S'].sum() if not aktif_group.empty else 0
+            else:
+                total_os = 0
         
         # d. Pembiayaan terakhir (tanggal terbaru dari fasilitas aktif)
         if not aktif_group.empty:
@@ -201,6 +204,15 @@ def recap_per_nasabah(df):
         })
     
     return pd.DataFrame(results)
+
+# ====================== FUNGSI DOWNLOAD EXCEL ======================
+def to_excel_download(df, sheet_name="Data"):
+    """Konversi DataFrame ke Excel untuk download"""
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name=sheet_name)
+    processed_data = output.getvalue()
+    return processed_data
 
 # ====================== ANTARMUKA STREAMLIT ======================
 st.set_page_config(page_title="SLIK Validator & Recap", layout="wide")
@@ -293,8 +305,8 @@ with tab1:
             else:
                 st.info("Tidak ada data tidak valid")
         
-        # Tombol download
-        st.subheader("📥 Download Data")
+        # Tombol download EXCEL
+        st.subheader("📥 Download Data (Excel)")
         col1, col2, col3 = st.columns(3)
         
         valid_data = st.session_state.df_now[st.session_state.df_now['Valid'] == True]
@@ -302,19 +314,52 @@ with tab1:
         
         with col1:
             if len(valid_data) > 0:
-                csv_valid = valid_data.to_csv(index=False).encode('utf-8')
-                st.download_button("✅ Download Data Valid (CSV)", csv_valid, "data_valid_slik.csv", "text/csv")
+                excel_valid = to_excel_download(valid_data, "Data Valid")
+                st.download_button(
+                    "✅ Download Data Valid (Excel)", 
+                    excel_valid, 
+                    "data_valid_slik.xlsx", 
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
             else:
                 st.button("✅ Download Data Valid", disabled=True, help="Tidak ada data valid")
+        
         with col2:
             if len(invalid_data) > 0:
-                csv_invalid = invalid_data.to_csv(index=False).encode('utf-8')
-                st.download_button("❌ Download Data Tidak Valid (CSV)", csv_invalid, "data_tidak_valid_slik.csv", "text/csv")
+                excel_invalid = to_excel_download(invalid_data, "Data Tidak Valid")
+                st.download_button(
+                    "❌ Download Data Tidak Valid (Excel)", 
+                    excel_invalid, 
+                    "data_tidak_valid_slik.xlsx", 
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
             else:
                 st.button("❌ Download Data Tidak Valid", disabled=True, help="Tidak ada data tidak valid")
+        
         with col3:
-            csv_all = st.session_state.df_now.to_csv(index=False).encode('utf-8')
-            st.download_button("📊 Download Semua Data (CSV)", csv_all, "all_data_slik.csv", "text/csv")
+            excel_all = to_excel_download(st.session_state.df_now, "Semua Data")
+            st.download_button(
+                "📊 Download Semua Data (Excel)", 
+                excel_all, 
+                "all_data_slik.xlsx", 
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+        
+        # Tombol download CSV (opsional)
+        with st.expander("📥 Download dalam format CSV (opsional)"):
+            st.caption("Jika lebih nyaman dengan format CSV, silakan download di sini:")
+            col_csv1, col_csv2, col_csv3 = st.columns(3)
+            with col_csv1:
+                if len(valid_data) > 0:
+                    csv_valid = valid_data.to_csv(index=False).encode('utf-8')
+                    st.download_button("✅ Data Valid (CSV)", csv_valid, "data_valid_slik.csv", "text/csv")
+            with col_csv2:
+                if len(invalid_data) > 0:
+                    csv_invalid = invalid_data.to_csv(index=False).encode('utf-8')
+                    st.download_button("❌ Data Tidak Valid (CSV)", csv_invalid, "data_tidak_valid_slik.csv", "text/csv")
+            with col_csv3:
+                csv_all = st.session_state.df_now.to_csv(index=False).encode('utf-8')
+                st.download_button("📊 Semua Data (CSV)", csv_all, "all_data_slik.csv", "text/csv")
         
     else:
         st.info("📁 Silakan upload file SLIK di sidebar kiri untuk memulai.")
@@ -357,10 +402,24 @@ with tab2:
                 nasabah_restru = st.session_state.recap_now['History Restrukturisasi (Tgl Terbaru)'].notna().sum()
                 st.metric("CIF dengan Restrukturisasi", nasabah_restru)
         
-        # Download rekap
-        st.subheader("📥 Download Rekapitulasi")
-        csv_recap = st.session_state.recap_now.to_csv(index=False).encode('utf-8')
-        st.download_button("📥 Download Rekap per CIF (CSV)", csv_recap, "recap_slik_per_cif.csv", "text/csv")
+        # Download rekap dalam format EXCEL
+        st.subheader("📥 Download Rekapitulasi (Excel)")
+        
+        # Siapkan data untuk download (tanpa format currency)
+        download_df = st.session_state.recap_now.copy()
+        
+        excel_recap = to_excel_download(download_df, "Rekapitulasi per CIF")
+        st.download_button(
+            "📥 Download Rekap per CIF (Excel)", 
+            excel_recap, 
+            "recap_slik_per_cif.xlsx", 
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+        
+        # Download CSV (opsional)
+        with st.expander("📥 Download dalam format CSV (opsional)"):
+            csv_recap = st.session_state.recap_now.to_csv(index=False).encode('utf-8')
+            st.download_button("📥 Download Rekap per CIF (CSV)", csv_recap, "recap_slik_per_cif.csv", "text/csv")
         
         # Tampilkan detail per CIF
         with st.expander("🔍 Detail per CIF"):
@@ -472,20 +531,18 @@ with tab4:
     
     > **Catatan Penting:** OS hanya dihitung jika kedua kondisi di atas terpenuhi secara bersamaan (AND)
     
-    ### **Perubahan dari sebelumnya**
+    ### **Format Download**
     
-    - **Sebelumnya:** Menggunakan kolom `Jenis Kredit` = "Modal Kerja"
-    - **Sekarang:** Menggunakan kolom `Fasilitas` = "Modal Kerja" ✅ (sesuai permintaan)
+    Sekarang mendukung **download dalam format Excel (XLSX)**:
+    - Data Valid
+    - Data Tidak Valid
+    - Semua Data
+    - Rekapitulasi per CIF
     
-    ### **Fitur Debug (Tab 3)**
-    
-    Gunakan tab Debug untuk melihat:
-    - Tipe data sebelum dan setelah cleaning
-    - Contoh nilai unik dari kolom-kolom penting (termasuk kolom `Fasilitas`)
-    - Hasil konversi numeric (sum)
-    - Unique CIF count
+    > Format Excel lebih mudah untuk analisis lanjutan dan sharing dengan tim.
     """)
 
 st.markdown("---")
 st.caption("✅ SLIK Processor - Validasi & Rekapitulasi Data SLIK per CIF | Langkah 1 s/d 3")
 st.caption("📌 **Kriteria OS:** Kondisi='Fasilitas Aktif' AND Fasilitas='Modal Kerja'")
+st.caption("📥 **Download format:** Excel (XLSX) dan CSV")
